@@ -1,118 +1,84 @@
-import streamlit as st
-import pandas as pd
-import yfinance as yf
-import requests
+import axios from 'axios';
 
-# === API Keys ===
-FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
-TRADING_ECON_USER = "c88d1d122399451"
-TRADING_ECON_KEY = "rdog9czpshn7zb9"
+// Load from environment variables
+const FINNHUB = process.env.FINNHUB_API_KEY;
+const TE_USER = process.env.TE_USERNAME;
+const TE_PASS = process.env.TE_API_KEY;
 
-# === Stock List ===
-stock_list = [
-    "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
-    "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
-    "AZN", "BIIB", "BKNG", "BKR", "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CMCSA", "CPRT", "CSGP", "CSCO",
-    "CSX", "CTAS", "CTSH", "CRWD", "DASH", "DDOG", "DXCM", "EA", "EXC", "FAST", "FANG", "FTNT", "GEHC",
-    "GILD", "GFS", "HON", "IDXX", "INTC", "INTU", "ISRG", "KDP", "KHC", "KLAC", "LIN", "LRCX", "LULU",
-    "MAR", "MCHP", "MDLZ", "MELI", "MNST", "MRVL", "MSTR", "MU", "NXPI", "ODFL", "ON", "ORLY", "PANW",
-    "PAYX", "PYPL", "PDD", "PEP", "PLTR", "QCOM", "REGN", "ROP", "ROST", "SHOP", "SBUX", "SNPS", "TTWO",
-    "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
-]
+/**
+ * Returns a combined sentiment score for a given symbol, based on multiple real-time sources.
+ * Score is a float between -1.00 (very bearish) and +1.00 (very bullish).
+ */
+export async function get_combined_score(symbol: string): Promise<number> {
+  let newsSentiment = 0, earningsSentiment = 0, ipoSentiment = 0;
+  let macroRiskScore = 0, optionsSentiment = 0, cotSentiment = 0, geoRisk = 0;
 
-# === Global Symbols (in their own block) ===
-macro_symbols = {
-    "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
-    "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD", "RUSSEL2000": "^RUT", "NIKKEI": "^N225", "SILVER": "SI=F",
-    "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
+  try {
+    /** 1. News Sentiment - from Finnhub */
+    const news = await axios.get(`https://finnhub.io/api/v1/news-sentiment?symbol=${symbol}&token=${FINNHUB}`);
+    newsSentiment = news.data?.sentiment?.score || 0;
+
+    /** 2. Earnings Sentiment - based on earnings surprise */
+    const earnings = await axios.get(`https://finnhub.io/api/v1/stock/earnings?symbol=${symbol}&token=${FINNHUB}`);
+    if (earnings.data?.length > 0) {
+      const last = earnings.data[0];
+      const surprise = last.actual - last.estimate;
+      earningsSentiment = surprise > 0 ? 0.7 : surprise < 0 ? -0.7 : 0;
+    }
+
+    /** 3. IPO Sentiment - bullish if lots of IPOs this month */
+    const ipo = await axios.get(`https://finnhub.io/api/v1/calendar/ipo?from=2025-07-01&to=2025-07-31&token=${FINNHUB}`);
+    ipoSentiment = ipo.data?.ipoCalendar?.length > 5 ? 0.5 : -0.5;
+
+    /** 4. Macro Risk - based on upcoming high-impact events */
+    const macro = await axios.get(`https://api.tradingeconomics.com/calendar/country/all?c=${TE_USER}:${TE_PASS}`);
+    const events = macro.data?.filter((e: any) =>
+      e.Importance >= 2 &&
+      new Date(e.Date) >= new Date()
+    );
+    macroRiskScore = events.length > 10 ? -1 : 1;
+
+    /** 5. Options Sentiment - call/put skew from Yahoo Finance */
+    const opt = await axios.get(`https://query2.finance.yahoo.com/v7/finance/options/${symbol}`);
+    const calls = opt.data?.optionChain?.result[0]?.options[0]?.calls?.length || 0;
+    const puts = opt.data?.optionChain?.result[0]?.options[0]?.puts?.length || 0;
+    optionsSentiment = calls > puts ? 0.6 : calls < puts ? -0.6 : 0;
+
+    /** 6. COT Sentiment - from TradingEconomics (or fallback 0) */
+    const cot = await axios.get(`https://api.tradingeconomics.com/cot?symbol=${symbol}&c=${TE_USER}:${TE_PASS}`);
+    cotSentiment = cot.data?.netPosition > 0 ? 0.4 : -0.4;
+
+    /** 7. Geopolitical Risk - headline keyword scan */
+    const geo = await axios.get(`https://finnhub.io/api/v1/news?category=general&token=${FINNHUB}`);
+    const warHeadlines = geo.data?.filter((n: any) =>
+      /war|conflict|missile|nuclear|strike|tensions/i.test(n.headline)
+    );
+    geoRisk = warHeadlines.length > 3 ? -0.5 : 0.2;
+
+  } catch (err: any) {
+    console.error(`Sentiment error for ${symbol}:`, err.message);
+  }
+
+  /** Combine all factors into weighted score */
+  const score =
+    0.25 * newsSentiment +
+    0.20 * earningsSentiment +
+    0.10 * ipoSentiment +
+    0.20 * macroRiskScore +
+    0.10 * optionsSentiment +
+    0.10 * cotSentiment +
+    0.05 * geoRisk;
+
+  console.log(`[SCORE] ${symbol}`, {
+    newsSentiment,
+    earningsSentiment,
+    ipoSentiment,
+    macroRiskScore,
+    optionsSentiment,
+    cotSentiment,
+    geoRisk,
+    score: score.toFixed(2),
+  });
+
+  return parseFloat(score.toFixed(2));
 }
-
-# === Streamlit Setup ===
-st.set_page_config(layout="wide")
-st.title("📊 Sentiment Scanner")
-st.sidebar.title("Settings")
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "30m", "4h","weekly",  "1d", "monthly"])
-
-# === Economic Risk Score ===
-def get_macro_risk_score():
-    try:
-        url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
-        res = requests.get(url).json()
-        red = sum(1 for e in res if e.get("importance") == 3)
-        yellow = sum(1 for e in res if e.get("importance") == 2)
-        return red + 0.5 * yellow
-    except:
-        return 0
-
-# === Scoring Logic ===
-def get_combined_score(symbol):
-    score = 0
-    try:
-        news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2: score += 1
-        if news.get("companyNewsScore", 0) < -0.2: score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except: pass
-
-    try:
-        earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except: pass
-
-    try:
-        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
-        for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
-    except: pass
-
-    macro_risk = get_macro_risk_score()
-    if macro_risk > 6: score -= 1
-
-    return score
-
-# === Process Each Symbol ===
-def process_symbol(symbol, label=None):
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="5d", interval=timeframe)
-        info = ticker.info
-
-        price = hist["Close"][-1] if not hist.empty else None
-        volume = hist["Volume"][-1] if not hist.empty else None
-        float_shares = info.get("floatShares", None)
-        market_cap = info.get("marketCap", None)
-
-        score = get_combined_score(symbol)
-        sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
-
-        return {
-            "Symbol": label or symbol,
-            "Price": f"${price:.2f}" if price else "N/A",
-            "Volume": f"{volume/1e6:.2f}M" if volume else "N/A",
-            "Float": f"{float_shares/1e6:.2f}M" if float_shares else "N/A",
-            "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
-            "Score": f"+{score}" if score > 0 else str(score),
-            "Sentiment": sentiment
-        }
-    except:
-        return {
-            "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
-            "Float": "Err", "CAP": "Err", "Score": "0", "Sentiment": "⚪"
-        }
-
-# === Build and Display Tables ===
-
-# Stocks First
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-st.subheader("📈 NASDAQ-100 Stocks")
-st.dataframe(stock_df, use_container_width=True)
-
-# Macro Symbols Next
-macro_data = [process_symbol(tick, name) for name, tick in macro_symbols.items()]
-macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-st.subheader("🌐 Global Market Symbols")
-st.dataframe(macro_df, use_container_width=True)
