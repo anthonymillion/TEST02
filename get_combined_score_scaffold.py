@@ -5,8 +5,10 @@ import requests
 
 # === API Keys ===
 FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
+TRADING_ECON_USER = "c88d1d122399451"
+TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
-# === Full NASDAQ-100 Stock List ===
+# === Stock List (NASDAQ-100) ===
 stock_list = [
     "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
     "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
@@ -18,7 +20,7 @@ stock_list = [
     "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
 ]
 
-# === Global Macro Symbols ===
+# === Global Market Symbols (shown below stock rows) ===
 macro_symbols = {
     "DXY": "DXY",
     "USDJPY": "USDJPY=X",
@@ -42,26 +44,56 @@ macro_symbols = {
 
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
-st.sidebar.title("📊 Scanner Settings")
-timeframe = st.sidebar.selectbox("Select Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 st.title("🧠 Multi-Sentiment Market Scanner (Live)")
+st.sidebar.title("Scanner Settings")
+timeframe = st.sidebar.selectbox("Select Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Sentiment Function ===
+# === Macro Risk Scoring ===
+def get_macro_risk_score():
+    try:
+        url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
+        res = requests.get(url).json()
+        red = sum(1 for e in res if e.get("importance") == 3)
+        yellow = sum(1 for e in res if e.get("importance") == 2)
+        return red + 0.5 * yellow
+    except:
+        return 0
+
+# === Combined Sentiment Score ===
 def get_combined_score(symbol):
     score = 0
     try:
-        news_url = f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}"
-        data = requests.get(news_url).json()
-        sentiment_score = data.get("companyNewsScore", 0)
-        if sentiment_score > 0.2:
-            score += 1
-        elif sentiment_score < -0.2:
-            score -= 1
-    except:
-        pass
+        # News sentiment
+        news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
+        if news.get("companyNewsScore", 0) > 0.2: score += 1
+        if news.get("companyNewsScore", 0) < -0.2: score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
+    except: pass
+
+    try:
+        # Earnings sentiment
+        earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
+        for e in earnings.get("earningsCalendar", []):
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
+    except: pass
+
+    try:
+        # IPO detection
+        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
+        for i in ipo.get("ipoCalendar", []):
+            if i.get("symbol") == symbol:
+                score += 1
+    except: pass
+
+    # Macro risk (high-impact economic events)
+    macro_risk = get_macro_risk_score()
+    if macro_risk > 6:
+        score -= 1
+
     return score
 
-# === Build Table Rows ===
+# === Symbol Processing ===
 def process_symbol(symbol, label=None):
     try:
         ticker = yf.Ticker(symbol)
@@ -83,27 +115,21 @@ def process_symbol(symbol, label=None):
             "Score": f"+{score}" if score > 0 else str(score),
             "Sentiment": sentiment
         }
-    except Exception as e:
+    except:
         return {
-            "Symbol": label or symbol,
-            "Price": "Error",
-            "Volume": "Error",
-            "Float": "Error",
-            "Score": "Error",
-            "Sentiment": "❌"
+            "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
+            "Float": "Err", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Main Table ===
+# === Build Final Table ===
 rows = []
 
-# Stocks
+# First: Stocks
 for sym in stock_list:
-    st.write(f"Processing {sym}...")
     rows.append(process_symbol(sym))
 
-# Macro symbols
+# Then: Macro symbols
 for label, ticker in macro_symbols.items():
-    st.write(f"Processing {label}...")
     rows.append(process_symbol(ticker, label))
 
 # === Display Table ===
