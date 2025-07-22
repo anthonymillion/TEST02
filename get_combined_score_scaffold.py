@@ -8,7 +8,7 @@ FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
 TRADING_ECON_USER = "c88d1d122399451"
 TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
-# === Stock List (NASDAQ-100) ===
+# === Stock List ===
 stock_list = [
     "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
     "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
@@ -20,35 +20,21 @@ stock_list = [
     "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
 ]
 
-# === Global Market Symbols (shown below stock rows) ===
+# === Global Symbols (in their own block) ===
 macro_symbols = {
-    "DXY": "DXY",
-    "USDJPY": "USDJPY=X",
-    "XAUUSD": "XAUUSD=X",
-    "EURUSD": "EURUSD=X",
-    "USOIL": "CL=F",
-    "USTECH100": "^NDX",
-    "S&P500": "^GSPC",
-    "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD",
-    "RUSSEL2000": "^RUT",
-    "NIKKEI": "^N225",
-    "SILVER": "SI=F",
-    "QQQ": "QQQ",
-    "NATGAS": "NG=F",
-    "COPPER": "HG=F",
-    "BRENT": "BZ=F",
-    "VIX": "^VIX",
-    "BONDYIELD": "^TNX"
+    "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
+    "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
+    "ETHUSD": "ETH-USD", "RUSSEL2000": "^RUT", "NIKKEI": "^N225", "SILVER": "SI=F",
+    "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
 }
 
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
-st.title("🧠 Multi-Sentiment Market Scanner (Live)")
-st.sidebar.title("Scanner Settings")
-timeframe = st.sidebar.selectbox("Select Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+st.title("📊 Sentiment Scanner")
+st.sidebar.title("Settings")
+timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Macro Risk Scoring ===
+# === Economic Risk Score ===
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -59,11 +45,10 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Combined Sentiment Score ===
+# === Scoring Logic ===
 def get_combined_score(symbol):
     score = 0
     try:
-        # News sentiment
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         if news.get("companyNewsScore", 0) > 0.2: score += 1
         if news.get("companyNewsScore", 0) < -0.2: score -= 1
@@ -71,7 +56,6 @@ def get_combined_score(symbol):
     except: pass
 
     try:
-        # Earnings sentiment
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
             if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
@@ -79,21 +63,17 @@ def get_combined_score(symbol):
     except: pass
 
     try:
-        # IPO detection
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol:
-                score += 1
+            if i.get("symbol") == symbol: score += 1
     except: pass
 
-    # Macro risk (high-impact economic events)
     macro_risk = get_macro_risk_score()
-    if macro_risk > 6:
-        score -= 1
+    if macro_risk > 6: score -= 1
 
     return score
 
-# === Symbol Processing ===
+# === Process Each Symbol ===
 def process_symbol(symbol, label=None):
     try:
         ticker = yf.Ticker(symbol)
@@ -103,6 +83,7 @@ def process_symbol(symbol, label=None):
         price = hist["Close"][-1] if not hist.empty else None
         volume = hist["Volume"][-1] if not hist.empty else None
         float_shares = info.get("floatShares", None)
+        market_cap = info.get("marketCap", None)
 
         score = get_combined_score(symbol)
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
@@ -110,29 +91,28 @@ def process_symbol(symbol, label=None):
         return {
             "Symbol": label or symbol,
             "Price": f"${price:.2f}" if price else "N/A",
-            "Volume": f"{volume / 1e6:.2f}M" if volume else "N/A",
-            "Float": f"{float_shares / 1e6:.2f}M" if float_shares else "N/A",
+            "Volume": f"{volume/1e6:.2f}M" if volume else "N/A",
+            "Float": f"{float_shares/1e6:.2f}M" if float_shares else "N/A",
+            "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
             "Score": f"+{score}" if score > 0 else str(score),
             "Sentiment": sentiment
         }
     except:
         return {
             "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
-            "Float": "Err", "Score": "0", "Sentiment": "⚪"
+            "Float": "Err", "CAP": "Err", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Build Final Table ===
-rows = []
+# === Build and Display Tables ===
 
-# First: Stocks
-for sym in stock_list:
-    rows.append(process_symbol(sym))
+# Stocks First
+stock_data = [process_symbol(sym) for sym in stock_list]
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+st.subheader("📈 NASDAQ-100 Stocks")
+st.dataframe(stock_df, use_container_width=True)
 
-# Then: Macro symbols
-for label, ticker in macro_symbols.items():
-    rows.append(process_symbol(ticker, label))
-
-# === Display Table ===
-df = pd.DataFrame(rows)
-df = df.sort_values("Score", ascending=False)
-st.dataframe(df, use_container_width=True)
+# Macro Symbols Next
+macro_data = [process_symbol(tick, name) for name, tick in macro_symbols.items()]
+macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+st.subheader("🌐 Global Market Symbols")
+st.dataframe(macro_df, use_container_width=True)
