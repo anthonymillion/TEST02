@@ -105,14 +105,14 @@ def process_symbol(symbol, label=None):
 
 # === Build and Display Tables ===
 
-# === Improved CSS: Remove Column Gap & Table Spacing ===
+# === CSS Styling for Dark Compact Two-Column View ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
         text-align: center !important;
         color: #ddd !important;
         background-color: #111 !important;
-        border-color: #333 !important;
+        border: 1px solid #333 !important;
         font-size: 14px !important;
     }
     .dataframe th {
@@ -124,13 +124,33 @@ st.markdown("""
         padding-bottom: 0rem !important;
     }
     .element-container:has(div[data-testid="column"]) {
-        gap: 0px !important;  /* This removes the horizontal gap between col1 and col2 */
+        gap: 0px !important;
     }
     .stDataFrame {
         margin-bottom: 0rem !important;
     }
-    h3, h2, h1 {
-        margin-bottom: 0.2rem !important;
-    }
     </style>
 """, unsafe_allow_html=True)
+
+# === Side-by-Side Layout Without Gap ===
+col1, col2 = st.columns([1, 1], gap="small")  # uses small gap, but visually compressed via CSS
+
+with col1:
+    st.markdown("### 📈 NASDAQ-100 Stocks")
+    st.dataframe(
+        pd.DataFrame([process_symbol(sym) for sym in stock_list])
+        .sort_values("Score", ascending=False)
+        .reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True
+    )
+
+with col2:
+    st.markdown("### 🌐 Global Market Symbols")
+    st.dataframe(
+        pd.DataFrame([process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()])
+        .sort_values("Score", ascending=False)
+        .reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True
+    )
