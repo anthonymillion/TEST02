@@ -32,7 +32,7 @@ macro_symbols = {
 st.set_page_config(layout="wide")
 st.title("📊 Sentiment Scanner")
 st.sidebar.title("Settings")
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "30m", "4h","weekly",  "1d"])
 
 # === Economic Risk Score ===
 def get_macro_risk_score():
