@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import requests
+from datetime import datetime, timedelta
 
 # === API Keys ===
 FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
@@ -20,7 +21,7 @@ stock_list = [
     "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
 ]
 
-# === Global Symbols (in their own block) ===
+# === Global Symbols ===
 macro_symbols = {
     "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
     "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
@@ -28,7 +29,7 @@ macro_symbols = {
     "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
 }
 
-# === Streamlit Setup ===
+# === Streamlit UI ===
 st.set_page_config(layout="wide")
 st.title("📊 Sentiment Scanner")
 st.sidebar.title("Settings")
@@ -45,47 +46,72 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Scoring Logic ===
+# === Combined Sentiment Score ===
 def get_combined_score(symbol):
     score = 0
     try:
+        # --- News Sentiment ---
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2: score += 1
-        if news.get("companyNewsScore", 0) < -0.2: score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except: pass
+        if news.get("companyNewsScore", 0) > 0.2:
+            score += 1
+        elif news.get("companyNewsScore", 0) < -0.2:
+            score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5:
+            score += 1
+    except:
+        pass
 
     try:
+        # --- Earnings Surprise ---
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except: pass
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
+                score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
+                score -= 1
+    except:
+        pass
 
     try:
-        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
+        # --- Recent IPO Signal ---
+        start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
+        end = datetime.today().strftime("%Y-%m-%d")
+        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
-    except: pass
+            if i.get("symbol") == symbol:
+                score += 1
+    except:
+        pass
 
+    # --- Macro Risk Impact ---
     macro_risk = get_macro_risk_score()
-    if macro_risk > 6: score -= 1
+    if macro_risk > 6:
+        score -= 1
 
     return score
 
-# === Process Each Symbol ===
-def process_symbol(symbol, label=None):
+# === Data Processing ===
+def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d", interval=timeframe)
-        info = ticker.info
 
-        price = hist["Close"][-1] if not hist.empty else None
-        volume = hist["Volume"][-1] if not hist.empty else None
-        float_shares = info.get("floatShares", None)
-        market_cap = info.get("marketCap", None)
+        if hist.empty:
+            return {
+                "Symbol": label or symbol,
+                "Price": "N/A", "Volume": "N/A", "Float": "N/A",
+                "CAP": "N/A", "Score": "0", "Sentiment": "⚪"
+            }
 
-        score = get_combined_score(symbol)
+        price = hist["Close"][-1]
+        volume = hist["Volume"][-1]
+        info = ticker.fast_info
+
+        float_shares = info.get("sharesOutstanding")  # fallback if float not available
+        market_cap = info.get("marketCap")
+
+        # Skip sentiment scoring for macro symbols
+        score = get_combined_score(symbol) if not is_macro else 0
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
         return {
@@ -97,22 +123,23 @@ def process_symbol(symbol, label=None):
             "Score": f"+{score}" if score > 0 else str(score),
             "Sentiment": sentiment
         }
-    except:
+    except Exception as e:
         return {
-            "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
-            "Float": "Err", "CAP": "Err", "Score": "0", "Sentiment": "⚪"
+            "Symbol": label or symbol,
+            "Price": "Err", "Volume": "Err", "Float": "Err",
+            "CAP": "Err", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Build and Display Tables ===
+# === Display Tables ===
 
-# Stocks First
+# Stocks
 stock_data = [process_symbol(sym) for sym in stock_list]
 stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 st.subheader("📈 NASDAQ-100 Stocks")
 st.dataframe(stock_df, use_container_width=True)
 
-# Macro Symbols Next
-macro_data = [process_symbol(tick, name) for name, tick in macro_symbols.items()]
+# Global Market Symbols
+macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 st.subheader("🌐 Global Market Symbols")
 st.dataframe(macro_df, use_container_width=True)
