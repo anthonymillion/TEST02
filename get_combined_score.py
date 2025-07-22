@@ -29,7 +29,7 @@ macro_symbols = {
     "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
 }
 
-# === Streamlit UI ===
+# === Streamlit Setup ===
 st.set_page_config(layout="wide")
 st.title("📊 Sentiment Scanner")
 st.sidebar.title("Settings")
@@ -50,7 +50,6 @@ def get_macro_risk_score():
 def get_combined_score(symbol):
     score = 0
     try:
-        # --- News Sentiment ---
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         if news.get("companyNewsScore", 0) > 0.2:
             score += 1
@@ -62,7 +61,6 @@ def get_combined_score(symbol):
         pass
 
     try:
-        # --- Earnings Surprise ---
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
             if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
@@ -73,7 +71,6 @@ def get_combined_score(symbol):
         pass
 
     try:
-        # --- Recent IPO Signal ---
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
@@ -83,14 +80,13 @@ def get_combined_score(symbol):
     except:
         pass
 
-    # --- Macro Risk Impact ---
     macro_risk = get_macro_risk_score()
     if macro_risk > 6:
         score -= 1
 
     return score
 
-# === Data Processing ===
+# === Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
@@ -107,10 +103,9 @@ def process_symbol(symbol, label=None, is_macro=False):
         volume = hist["Volume"][-1]
         info = ticker.fast_info
 
-        float_shares = info.get("sharesOutstanding")  # fallback if float not available
+        float_shares = info.get("sharesOutstanding")
         market_cap = info.get("marketCap")
 
-        # Skip sentiment scoring for macro symbols
         score = get_combined_score(symbol) if not is_macro else 0
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
@@ -123,23 +118,54 @@ def process_symbol(symbol, label=None, is_macro=False):
             "Score": f"+{score}" if score > 0 else str(score),
             "Sentiment": sentiment
         }
-    except Exception as e:
+    except:
         return {
             "Symbol": label or symbol,
             "Price": "Err", "Volume": "Err", "Float": "Err",
             "CAP": "Err", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Display Tables ===
-
-# Stocks
+# === Build Tables ===
 stock_data = [process_symbol(sym) for sym in stock_list]
 stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-st.subheader("📈 NASDAQ-100 Stocks")
-st.dataframe(stock_df, use_container_width=True)
 
-# Global Market Symbols
 macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-st.subheader("🌐 Global Market Symbols")
-st.dataframe(macro_df, use_container_width=True)
+
+# === Dark Theme Table Styling ===
+st.markdown("""
+    <style>
+    .dataframe th, .dataframe td {
+        text-align: center !important;
+        color: #ddd !important;
+        background-color: #111 !important;
+        border-color: #333 !important;
+    }
+    .dataframe th {
+        background-color: #222 !important;
+        font-weight: bold;
+    }
+    .block-container {
+        padding-top: 1rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# === Display Side-by-Side Tables ===
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### 📈 NASDAQ-100 Stocks")
+    st.dataframe(
+        stock_df.reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True
+    )
+
+with col2:
+    st.markdown("### 🌐 Global Market Symbols")
+    st.dataframe(
+        macro_df.reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True
+    )
