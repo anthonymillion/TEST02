@@ -1,91 +1,118 @@
+import streamlit as st
+import pandas as pd
+import yfinance as yf
 import requests
-import datetime
 
+# === API Keys ===
 FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
-TE_USERNAME = "c88d1d122399451"
-TE_API_KEY = "rdog9czpshn7zb9"
+TRADING_ECON_USER = "c88d1d122399451"
+TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
-def get_combined_score(symbol: str) -> float:
-    news_sentiment = 0
-    earnings_sentiment = 0
-    ipo_sentiment = 0
-    macro_risk_score = 0
-    options_sentiment = 0
-    cot_sentiment = 0
-    geo_risk = 0
+# === Stock List ===
+stock_list = [
+    "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
+    "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
+    "AZN", "BIIB", "BKNG", "BKR", "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CMCSA", "CPRT", "CSGP", "CSCO",
+    "CSX", "CTAS", "CTSH", "CRWD", "DASH", "DDOG", "DXCM", "EA", "EXC", "FAST", "FANG", "FTNT", "GEHC",
+    "GILD", "GFS", "HON", "IDXX", "INTC", "INTU", "ISRG", "KDP", "KHC", "KLAC", "LIN", "LRCX", "LULU",
+    "MAR", "MCHP", "MDLZ", "MELI", "MNST", "MRVL", "MSTR", "MU", "NXPI", "ODFL", "ON", "ORLY", "PANW",
+    "PAYX", "PYPL", "PDD", "PEP", "PLTR", "QCOM", "REGN", "ROP", "ROST", "SHOP", "SBUX", "SNPS", "TTWO",
+    "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
+]
+
+# === Global Symbols (in their own block) ===
+macro_symbols = {
+    "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
+    "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
+    "ETHUSD": "ETH-USD", "RUSSEL2000": "^RUT", "NIKKEI": "^N225", "SILVER": "SI=F",
+    "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
+}
+
+# === Streamlit Setup ===
+st.set_page_config(layout="wide")
+st.title("📊 Sentiment Scanner")
+st.sidebar.title("Settings")
+timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+
+# === Economic Risk Score ===
+def get_macro_risk_score():
+    try:
+        url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
+        res = requests.get(url).json()
+        red = sum(1 for e in res if e.get("importance") == 3)
+        yellow = sum(1 for e in res if e.get("importance") == 2)
+        return red + 0.5 * yellow
+    except:
+        return 0
+
+# === Scoring Logic ===
+def get_combined_score(symbol):
+    score = 0
+    try:
+        news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
+        if news.get("companyNewsScore", 0) > 0.2: score += 1
+        if news.get("companyNewsScore", 0) < -0.2: score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
+    except: pass
 
     try:
-        # 1. News Sentiment
-        news_url = f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}"
-        news_res = requests.get(news_url).json()
-        news_sentiment = news_res.get("sentiment", {}).get("score", 0)
+        earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
+        for e in earnings.get("earningsCalendar", []):
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
+    except: pass
 
-        # 2. Earnings Sentiment
-        earnings_url = f"https://finnhub.io/api/v1/stock/earnings?symbol={symbol}&token={FINNHUB_API_KEY}"
-        earnings_res = requests.get(earnings_url).json()
-        if earnings_res:
-            latest = earnings_res[0]
-            surprise = latest["actual"] - latest["estimate"]
-            earnings_sentiment = 0.7 if surprise > 0 else -0.7 if surprise < 0 else 0
+    try:
+        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
+        for i in ipo.get("ipoCalendar", []):
+            if i.get("symbol") == symbol: score += 1
+    except: pass
 
-        # 3. IPO Sentiment
-        today = datetime.date.today()
-        month_start = today.replace(day=1).strftime('%Y-%m-%d')
-        month_end = (today.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
-        ipo_url = f"https://finnhub.io/api/v1/calendar/ipo?from={month_start}&to={month_end}&token={FINNHUB_API_KEY}"
-        ipo_res = requests.get(ipo_url).json()
-        ipo_count = len(ipo_res.get("ipoCalendar", []))
-        ipo_sentiment = 0.5 if ipo_count > 5 else -0.5
+    macro_risk = get_macro_risk_score()
+    if macro_risk > 6: score -= 1
 
-        # 4. Macro Risk Score
-        calendar_url = f"https://api.tradingeconomics.com/calendar/country/all?c={TE_USERNAME}:{TE_API_KEY}"
-        cal_res = requests.get(calendar_url).json()
-        upcoming_events = [e for e in cal_res if e.get("Importance", 0) >= 2 and e.get("Date")]
-        macro_risk_score = -1 if len(upcoming_events) > 10 else 1
+    return score
 
-        # 5. Options Sentiment (calls vs puts)
-        yahoo_url = f"https://query2.finance.yahoo.com/v7/finance/options/{symbol}"
-        opt_res = requests.get(yahoo_url).json()
-        options_data = opt_res["optionChain"]["result"][0]["options"][0]
-        calls = len(options_data.get("calls", []))
-        puts = len(options_data.get("puts", []))
-        options_sentiment = 0.6 if calls > puts else -0.6 if puts > calls else 0
+# === Process Each Symbol ===
+def process_symbol(symbol, label=None):
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="5d", interval=timeframe)
+        info = ticker.info
 
-        # 6. COT Sentiment (placeholder logic)
-        cot_url = f"https://api.tradingeconomics.com/cot?symbol={symbol}&c={TE_USERNAME}:{TE_API_KEY}"
-        cot_res = requests.get(cot_url).json()
-        net = cot_res[0]["netPosition"] if cot_res and "netPosition" in cot_res[0] else 0
-        cot_sentiment = 0.4 if net > 0 else -0.4 if net < 0 else 0
+        price = hist["Close"][-1] if not hist.empty else None
+        volume = hist["Volume"][-1] if not hist.empty else None
+        float_shares = info.get("floatShares", None)
+        market_cap = info.get("marketCap", None)
 
-        # 7. Geopolitical Risk
-        geo_url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
-        geo_res = requests.get(geo_url).json()
-        war_words = ["war", "conflict", "strike", "missile", "tensions", "nuclear"]
-        war_count = sum(any(word in news["headline"].lower() for word in war_words) for news in geo_res)
-        geo_risk = -0.5 if war_count > 3 else 0.2
+        score = get_combined_score(symbol)
+        sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
-    except Exception as e:
-        print(f"Error getting sentiment for {symbol}: {str(e)}")
+        return {
+            "Symbol": label or symbol,
+            "Price": f"${price:.2f}" if price else "N/A",
+            "Volume": f"{volume/1e6:.2f}M" if volume else "N/A",
+            "Float": f"{float_shares/1e6:.2f}M" if float_shares else "N/A",
+            "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
+            "Score": f"+{score}" if score > 0 else str(score),
+            "Sentiment": sentiment
+        }
+    except:
+        return {
+            "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
+            "Float": "Err", "CAP": "Err", "Score": "0", "Sentiment": "⚪"
+        }
 
-    # Weighted scoring
-    score = (
-        0.25 * news_sentiment +
-        0.20 * earnings_sentiment +
-        0.10 * ipo_sentiment +
-        0.20 * macro_risk_score +
-        0.10 * options_sentiment +
-        0.10 * cot_sentiment +
-        0.05 * geo_risk
-    )
+# === Build and Display Tables ===
 
-    print(f"[SCORE] {symbol}: {round(score, 2)} | Breakdown:", {
-        "news": news_sentiment,
-        "earnings": earnings_sentiment,
-        "ipo": ipo_sentiment,
-        "macro": macro_risk_score,
-        "options": options_sentiment,
-        "cot": cot_sentiment,
-        "geo": geo_risk,
-    })
+# Stocks First
+stock_data = [process_symbol(sym) for sym in stock_list]
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+st.subheader("📈 NASDAQ-100 Stocks")
+st.dataframe(stock_df, use_container_width=True)
 
-    return round(score, 2)
+# Macro Symbols Next
+macro_data = [process_symbol(tick, name) for name, tick in macro_symbols.items()]
+macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+st.subheader("🌐 Global Market Symbols")
+st.dataframe(macro_df, use_container_width=True)
