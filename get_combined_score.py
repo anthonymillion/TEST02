@@ -21,7 +21,7 @@ stock_list = [
     "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
 ]
 
-# === Global Symbols ===
+# === Global Market Symbols ===
 macro_symbols = {
     "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
     "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
@@ -46,7 +46,7 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Combined Sentiment Score ===
+# === Sentiment Score Logic ===
 def get_combined_score(symbol):
     score = 0
     try:
@@ -57,8 +57,7 @@ def get_combined_score(symbol):
             score -= 1
         if news.get("sectorAverageBullishPercent", 0) > 0.5:
             score += 1
-    except:
-        pass
+    except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
@@ -67,8 +66,7 @@ def get_combined_score(symbol):
                 score += 1
             elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
                 score -= 1
-    except:
-        pass
+    except: pass
 
     try:
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
@@ -77,23 +75,20 @@ def get_combined_score(symbol):
         for i in ipo.get("ipoCalendar", []):
             if i.get("symbol") == symbol:
                 score += 1
-    except:
-        pass
+    except: pass
 
-    macro_risk = get_macro_risk_score()
-    if macro_risk > 6:
+    if get_macro_risk_score() > 6:
         score -= 1
 
     return score
 
-# === Data Processor ===
+# === Symbol Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d", interval=timeframe)
-
         if hist.empty:
-            raise ValueError("Empty history")
+            raise ValueError("Empty data")
 
         price = hist["Close"][-1]
         volume = hist["Volume"][-1]
@@ -121,7 +116,7 @@ def process_symbol(symbol, label=None, is_macro=False):
             "CAP": "N/A", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Build DataFrames with error protection ===
+# === Build Tables Safely ===
 stock_data = [process_symbol(sym) for sym in stock_list]
 stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 
@@ -132,7 +127,7 @@ except Exception as e:
     st.error("⚠️ Error loading Global Market Symbols.")
     macro_df = pd.DataFrame()
 
-# === CSS Styling for Dark Mode + Resizable Flex Layout ===
+# === Style & Layout ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
@@ -148,38 +143,24 @@ st.markdown("""
     }
     .block-container {
         padding-top: 1rem !important;
+        padding-bottom: 0rem !important;
     }
-    .flex-container {
-        display: flex;
-        width: 100%;
-        gap: 0px;
+    .element-container:has(div[data-testid="column"]) {
+        gap: 0px !important;
     }
-    .flex-child {
-        flex: 1;
-        padding: 0px;
-    }
-    .resizable {
-        resize: horizontal;
-        overflow: auto;
-        min-width: 300px;
-        max-width: 100%;
+    h3, h2 {
+        margin-bottom: 0.3rem !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# === Display Tables in Resizable Layout ===
-st.markdown('<div class="flex-container">', unsafe_allow_html=True)
+# === Side-by-Side Tables ===
+col1, col2 = st.columns([1, 1], gap="small")
 
-# Stocks Table (resizable left panel)
-st.markdown('<div class="flex-child resizable">', unsafe_allow_html=True)
-st.markdown("### 📈 NASDAQ-100 Stocks")
-st.dataframe(stock_df.reset_index(drop=True), use_container_width=True, hide_index=True)
-st.markdown('</div>', unsafe_allow_html=True)
+with col1:
+    st.markdown("### 📈 NASDAQ-100 Stocks")
+    st.dataframe(stock_df.reset_index(drop=True), use_container_width=True, hide_index=True)
 
-# Global Table (fixed right panel)
-st.markdown('<div class="flex-child">', unsafe_allow_html=True)
-st.markdown("### 🌐 Global Market Symbols")
-st.dataframe(macro_df.reset_index(drop=True), use_container_width=True, hide_index=True)
-st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('</div>', unsafe_allow_html=True)
+with col2:
+    st.markdown("### 🌐 Global Market Symbols")
+    st.dataframe(macro_df.reset_index(drop=True), use_container_width=True, hide_index=True)
