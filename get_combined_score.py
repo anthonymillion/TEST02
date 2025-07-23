@@ -5,47 +5,41 @@ import requests
 import io
 from datetime import datetime, timedelta
 
-# === API Keys ===
-FINNHUB_API_KEY = "d1uv2rhr01qujmdeohvg"
+# === API KEYS ===
+FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
 TRADING_ECON_USER = "c88d1d122399451"
 TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
-# === Stock List ===
-stock_list = ["NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST"]
-
-# === Global Market Symbols ===
+# === STOCKS & GLOBAL SYMBOLS ===
+stock_list = ["NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "META", "TSLA", "NFLX"]
 macro_symbols = {
     "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
-    "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD", "RUSSEL2000": "^RUT", "NIKKEI": "^N225", "SILVER": "SI=F",
-    "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
+    "USOIL": "CL=F", "S&P500": "^GSPC", "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD",
+    "NATGAS": "NG=F", "SILVER": "SI=F", "COPPER": "HG=F", "BRENT": "BZ=F"
 }
 
-# === Mapping Macro Symbols to COT Report Names ===
+# === COT LABEL MAP ===
 cot_name_map = {
-    "DXY": "U.S. Dollar Index", "USDJPY=X": "Japanese Yen", "XAUUSD=X": "Gold", "EURUSD=X": "Euro FX",
-    "CL=F": "Crude Oil", "^NDX": "Nasdaq 100", "^GSPC": "S&P 500", "NG=F": "Natural Gas",
-    "SI=F": "Silver", "BZ=F": "Brent Crude Oil", "^TNX": "10-Year Treasury Note"
+    "DXY": "U.S. Dollar Index", "USDJPY=X": "Japanese Yen", "XAUUSD=X": "Gold",
+    "EURUSD=X": "Euro FX", "CL=F": "Crude Oil", "NG=F": "Natural Gas",
+    "SI=F": "Silver", "HG=F": "Copper", "BZ=F": "Brent Crude Oil"
 }
 
-# === Streamlit Setup ===
+# === STREAMLIT SETUP ===
 st.set_page_config(layout="wide")
-st.title("Sentiment Scanner with COT Data")
-st.sidebar.title("Settings")
-timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+st.title("📊 Sentiment Scanner with COT Integration")
+st.sidebar.title("⚙️ Settings")
+timeframe = st.sidebar.selectbox("⏱ Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Fetch COT data with working URL ===
-@st.cache_data(ttl=7*24*3600)
+# === FETCH COT DATA ===
+@st.cache_data(ttl=7 * 24 * 3600)
 def fetch_cot_data():
-    url = url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
-  # ✅ Fixed URL
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
     try:
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text), skiprows=7)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
+        df = pd.read_csv(io.StringIO(res.text), skiprows=7)
         df["Report_Date_as_MM_DD_YYYY"] = pd.to_datetime(df["Report_Date_as_MM_DD_YYYY"])
         return df
     except Exception as e:
@@ -54,11 +48,14 @@ def fetch_cot_data():
 
 cot_df = fetch_cot_data()
 
-def get_latest_cot_for_instrument(df, name):
-    subset = df[df["Market_and_Exchange_Names"].str.contains(name, case=False, na=False)]
+def get_latest_cot(symbol_name):
+    if cot_df.empty: return None
+    subset = cot_df[cot_df["Market_and_Exchange_Names"].str.contains(symbol_name, case=False, na=False)]
     if subset.empty: return None
-    return subset[subset["Report_Date_as_MM_DD_YYYY"] == subset["Report_Date_as_MM_DD_YYYY"].max()].iloc[0]
+    latest = subset[subset["Report_Date_as_MM_DD_YYYY"] == subset["Report_Date_as_MM_DD_YYYY"].max()]
+    return latest.iloc[0] if not latest.empty else None
 
+# === RISK SCORE ===
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -66,8 +63,10 @@ def get_macro_risk_score():
         red = sum(1 for e in res if e.get("importance") == 3)
         yellow = sum(1 for e in res if e.get("importance") == 2)
         return red + 0.5 * yellow
-    except: return 0
+    except:
+        return 0
 
+# === COMBINED SCORE ===
 def get_combined_score(symbol):
     score = 0
     try:
@@ -94,19 +93,21 @@ def get_combined_score(symbol):
 
     if get_macro_risk_score() > 6: score -= 1
 
-    cot_name = cot_name_map.get(symbol)
-    if cot_name and not cot_df.empty:
-        cot_data = get_latest_cot_for_instrument(cot_df, cot_name)
-        if cot_data is not None:
+    cot_key = cot_name_map.get(symbol)
+    if cot_key:
+        cot = get_latest_cot(cot_key)
+        if cot is not None:
             try:
-                net = cot_data["Noncommercial_Long_All"] - cot_data["Noncommercial_Short_All"]
-                ratio = net / cot_data["Open_Interest"] if cot_data["Open_Interest"] else 0
+                net = cot["Noncommercial_Long_All"] - cot["Noncommercial_Short_All"]
+                open_interest = cot["Open_Interest"]
+                ratio = net / open_interest if open_interest else 0
                 if ratio > 0.1: score += 1
                 elif ratio < -0.1: score -= 1
             except: pass
 
     return score
 
+# === SYMBOL PROCESSING ===
 def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
@@ -141,16 +142,14 @@ def process_symbol(symbol, label=None, is_macro=False):
             "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral"
         }
 
-# === Cell Styling ===
+# === STYLES ===
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
-    color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center;"
+    return f"background-color:{color_map.get(val, '#6c757d')};color:white;font-weight:bold;text-align:center;"
 
 def style_sentiment_cell(val):
     color_map = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}
-    color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center;"
+    return f"background-color:{color_map.get(val, '#6c757d')};color:white;font-weight:bold;text-align:center;"
 
 def style_df(df):
     return (df.style
@@ -161,19 +160,20 @@ def style_df(df):
                 {'selector': 'th', 'props': [('text-align', 'center'), ('background-color', '#222'), ('color', '#ddd')]},
                 {'selector': 'td', 'props': [('border', '1px solid #333'), ('padding', '6px 10px'), ('font-size', '14px')]}
             ])
-           )
+    )
 
-# === Layout Display ===
+# === BUILD TABLES ===
+stock_data = [process_symbol(s) for s in stock_list]
+macro_data = [process_symbol(t, label, is_macro=True) for label, t in macro_symbols.items()]
+
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+
+# === LAYOUT ===
 col1, col2 = st.columns([1, 1], gap="small")
-
 with col1:
-    st.markdown("### NASDAQ-100 Stocks")
-    stock_data = [process_symbol(sym) for sym in stock_list]
-    stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+    st.markdown("### 📈 NASDAQ Stocks")
     st.dataframe(style_df(stock_df), use_container_width=True)
-
 with col2:
-    st.markdown("### Global Market Symbols")
-    macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-    macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+    st.markdown("### 🌍 Global Market Symbols")
     st.dataframe(style_df(macro_df), use_container_width=True)
