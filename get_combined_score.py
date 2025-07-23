@@ -197,12 +197,8 @@ macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
 # === Layout Display ===
-col1, col2 = st.columns([1, 1], gap="small")
+st.markdown("### NASDAQ-100 Stocks")
+st.dataframe(style_df(stock_df), use_container_width=True)
 
-with col1:
-    st.markdown("### NASDAQ-100 Stocks")
-    st.dataframe(style_df(stock_df), use_container_width=True)
-
-with col2:
-    st.markdown("### Global Market Symbols")
-    st.dataframe(style_df(macro_df), use_container_width=True)
+st.markdown("### Global Market Symbols")
+st.dataframe(style_df(macro_df), use_container_width=True)
