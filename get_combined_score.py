@@ -5,7 +5,7 @@ import requests
 from datetime import datetime, timedelta
 
 # === API Keys ===
-FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
+FINNHUB_API_KEY = "d1uv2rhr01qujmdeohvg"
 TRADING_ECON_USER = "c88d1d122399451"
 TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
@@ -29,11 +29,52 @@ macro_symbols = {
     "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
 }
 
+# === Mapping Macro Symbols to COT Report Names ===
+cot_name_map = {
+    "DXY": "U.S. Dollar Index",
+    "USDJPY=X": "Japanese Yen",
+    "XAUUSD=X": "Gold",
+    "EURUSD=X": "Euro FX",
+    "CL=F": "Crude Oil",
+    "^NDX": "Nasdaq 100",
+    "^GSPC": "S&P 500",
+    "NG=F": "Natural Gas",
+    "SI=F": "Silver",
+    "BZ=F": "Brent Crude Oil",
+    "^TNX": "10-Year Treasury Note",
+    # Add more mappings if needed
+}
+
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
-st.title("Sentiment Scanner")
+st.title("Sentiment Scanner with COT Data")
 st.sidebar.title("Settings")
+
+# Sidebar controls
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
+
+# === Fetch and cache COT data (cached for 7 days) ===
+@st.cache_data(ttl=7*24*3600)
+def fetch_cot_data():
+    url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
+    try:
+        df = pd.read_csv(url, skiprows=7)
+        df["Report_Date_as_MM_DD_YYYY"] = pd.to_datetime(df["Report_Date_as_MM_DD_YYYY"])
+        return df
+    except Exception as e:
+        st.error(f"Error fetching COT data: {e}")
+        return pd.DataFrame()
+
+cot_df = fetch_cot_data()
+
+# === Helper: Get latest COT record for given instrument ===
+def get_latest_cot_for_instrument(df, instrument_name):
+    filtered = df[df["Market_and_Exchange_Names"].str.contains(instrument_name, case=False, na=False)]
+    if filtered.empty:
+        return None
+    latest_date = filtered["Report_Date_as_MM_DD_YYYY"].max()
+    latest_data = filtered[filtered["Report_Date_as_MM_DD_YYYY"] == latest_date].iloc[0]
+    return latest_data
 
 # === Macro Risk Score ===
 def get_macro_risk_score():
@@ -46,32 +87,68 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Combined Score ===
+# === Combined Score with COT Sentiment ===
 def get_combined_score(symbol):
     score = 0
     try:
+        # News sentiment
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         if news.get("companyNewsScore", 0) > 0.2: score += 1
         elif news.get("companyNewsScore", 0) < -0.2: score -= 1
         if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except: pass
+    except:
+        pass
 
     try:
+        # Earnings calendar
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
             if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
             elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except: pass
+    except:
+        pass
 
     try:
+        # IPO calendar
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
-    except: pass
+            if i.get("symbol") == symbol:
+                score += 1
+    except:
+        pass
 
-    if get_macro_risk_score() > 6: score -= 1
+    # Macro risk events
+    if get_macro_risk_score() > 6:
+        score -= 1
+
+    # --- COT Sentiment integration ---
+    # Check if symbol has a mapped COT instrument name
+    cot_instrument = None
+    # First try mapping by macro symbol keys
+    for key, val in macro_symbols.items():
+        if val == symbol:
+            cot_instrument = cot_name_map.get(key)
+            break
+    # If no match, try direct symbol lookup
+    if not cot_instrument:
+        cot_instrument = cot_name_map.get(symbol)
+    
+    if cot_instrument and not cot_df.empty:
+        cot_data = get_latest_cot_for_instrument(cot_df, cot_instrument)
+        if cot_data is not None:
+            try:
+                net_noncom = cot_data["Noncommercial_Long_All"] - cot_data["Noncommercial_Short_All"]
+                open_interest = cot_data["Open_Interest"]
+                net_ratio = net_noncom / open_interest if open_interest > 0 else 0
+                if net_ratio > 0.1:
+                    score += 1
+                elif net_ratio < -0.1:
+                    score -= 1
+            except:
+                pass
+
     return score
 
 # === Symbol Data Processor ===
@@ -109,13 +186,6 @@ def process_symbol(symbol, label=None, is_macro=False):
             "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral"
         }
 
-# === Build DataFrames ===
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-
-macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-
 # === Cell Styling ===
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
@@ -147,8 +217,12 @@ col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
     st.markdown("### NASDAQ-100 Stocks")
+    stock_data = [process_symbol(sym) for sym in stock_list]
+    stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
     st.dataframe(style_df(stock_df), use_container_width=True)
 
 with col2:
     st.markdown("### Global Market Symbols")
+    macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+    macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
     st.dataframe(style_df(macro_df), use_container_width=True)
