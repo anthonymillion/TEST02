@@ -31,21 +31,20 @@ macro_symbols = {
 
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
-st.title("\ud83d\udcca Sentiment Scanner")
+st.title("Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Color-Coded Trend Box ===
+# === Color-Coded Boxes ===
 def styled_trend(trend):
     color = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}.get(trend, "#6c757d")
     return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{trend}</span>'
 
-# === Color-Coded Sentiment Box ===
 def styled_sentiment(sentiment):
     color = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}.get(sentiment, "#6c757d")
     return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{sentiment}</span>'
 
-# === Risk Score ===
+# === Economic Risk Score ===
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -56,7 +55,7 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Score Function ===
+# === Scoring Logic ===
 def get_combined_score(symbol):
     score = 0
     try:
@@ -84,7 +83,7 @@ def get_combined_score(symbol):
     if get_macro_risk_score() > 6: score -= 1
     return score
 
-# === Symbol Processor ===
+# === Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
@@ -126,12 +125,13 @@ stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
+# === Format Columns ===
 stock_df["Trend"] = stock_df["Trend"].apply(styled_trend)
 stock_df["Sentiment"] = stock_df["Sentiment"].apply(styled_sentiment)
 macro_df["Trend"] = macro_df["Trend"].apply(styled_trend)
 macro_df["Sentiment"] = macro_df["Sentiment"].apply(styled_sentiment)
 
-# === Clean Theme Styling ===
+# === Styling ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
@@ -152,19 +152,16 @@ st.markdown("""
     .element-container:has(div[data-testid="column"]) {
         gap: 0px !important;
     }
-    h3, h2 {
-        margin-bottom: 0.3rem !important;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# === Layout ===
+# === Display Side-by-Side ===
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
-    st.markdown("### \ud83d\udcc8 NASDAQ-100 Stocks")
+    st.markdown("### NASDAQ-100 Stocks")
     st.write(stock_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 with col2:
-    st.markdown("### \ud83c\udf10 Global Market Symbols")
+    st.markdown("### Global Market Symbols")
     st.write(macro_df.to_html(escape=False, index=False), unsafe_allow_html=True)
