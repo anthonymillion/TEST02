@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import requests
+import io
 from datetime import datetime, timedelta
 
 # === API Keys ===
@@ -42,7 +43,7 @@ cot_name_map = {
     "SI=F": "Silver",
     "BZ=F": "Brent Crude Oil",
     "^TNX": "10-Year Treasury Note",
-    # Add more mappings if needed
+    # Add more mappings as needed
 }
 
 # === Streamlit Setup ===
@@ -57,8 +58,14 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 @st.cache_data(ttl=7*24*3600)
 def fetch_cot_data():
     url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+    }
     try:
-        df = pd.read_csv(url, skiprows=7)
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        csv_data = io.StringIO(response.text)
+        df = pd.read_csv(csv_data, skiprows=7)
         df["Report_Date_as_MM_DD_YYYY"] = pd.to_datetime(df["Report_Date_as_MM_DD_YYYY"])
         return df
     except Exception as e:
@@ -91,7 +98,6 @@ def get_macro_risk_score():
 def get_combined_score(symbol):
     score = 0
     try:
-        # News sentiment
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         if news.get("companyNewsScore", 0) > 0.2: score += 1
         elif news.get("companyNewsScore", 0) < -0.2: score -= 1
@@ -100,7 +106,6 @@ def get_combined_score(symbol):
         pass
 
     try:
-        # Earnings calendar
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
             if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
@@ -109,7 +114,6 @@ def get_combined_score(symbol):
         pass
 
     try:
-        # IPO calendar
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
@@ -119,22 +123,19 @@ def get_combined_score(symbol):
     except:
         pass
 
-    # Macro risk events
     if get_macro_risk_score() > 6:
         score -= 1
 
-    # --- COT Sentiment integration ---
-    # Check if symbol has a mapped COT instrument name
+    # COT Sentiment integration
     cot_instrument = None
-    # First try mapping by macro symbol keys
+    # Map macro_symbols values to cot_name_map keys
     for key, val in macro_symbols.items():
         if val == symbol:
             cot_instrument = cot_name_map.get(key)
             break
-    # If no match, try direct symbol lookup
     if not cot_instrument:
         cot_instrument = cot_name_map.get(symbol)
-    
+
     if cot_instrument and not cot_df.empty:
         cot_data = get_latest_cot_for_instrument(cot_df, cot_instrument)
         if cot_data is not None:
