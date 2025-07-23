@@ -49,18 +49,29 @@ def get_macro_risk_score():
 # === Combined Score ===
 def get_combined_score(symbol):
     score = 0
+    source = []
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2: score += 1
-        elif news.get("companyNewsScore", 0) < -0.2: score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
+        if news.get("companyNewsScore", 0) > 0.2:
+            score += 1
+            source.append("News")
+        elif news.get("companyNewsScore", 0) < -0.2:
+            score -= 1
+            source.append("News")
+        if news.get("sectorAverageBullishPercent", 0) > 0.5:
+            score += 1
+            source.append("News")
     except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
+                score += 1
+                source.append("Earnings")
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
+                score -= 1
+                source.append("Earnings")
     except: pass
 
     try:
@@ -68,22 +79,29 @@ def get_combined_score(symbol):
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
+            if i.get("symbol") == symbol:
+                score += 1
+                source.append("IPO")
     except: pass
 
     try:
         ticker = yf.Ticker(symbol)
         opt = ticker.option_chain()
-        call_oi = opt.calls["openInterest"].sum()
-        put_oi = opt.puts["openInterest"].sum()
-        if call_oi > put_oi * 1.2:
+        calls = opt.calls["openInterest"].sum()
+        puts = opt.puts["openInterest"].sum()
+        if calls > puts * 1.2:
             score += 1
-        elif put_oi > call_oi * 1.2:
+            source.append("Options")
+        elif puts > calls * 1.2:
             score -= 1
+            source.append("Options")
     except: pass
 
-    if get_macro_risk_score() > 6: score -= 1
-    return score
+    if get_macro_risk_score() > 6:
+        score -= 1
+        source.append("Macro")
+
+    return score, ", ".join(sorted(set(source)))
 
 # === Symbol Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
@@ -99,7 +117,7 @@ def process_symbol(symbol, label=None, is_macro=False):
         float_shares = info.get("sharesOutstanding")
         market_cap = info.get("marketCap")
 
-        score = get_combined_score(symbol) if not is_macro else 0
+        score, drivers = get_combined_score(symbol) if not is_macro else (0, "")
         trend = "UPTREND" if score > 0 else "DOWNTREND" if score < 0 else "NEUTRAL"
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
@@ -111,21 +129,15 @@ def process_symbol(symbol, label=None, is_macro=False):
             "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
             "Score": f"+{score}" if score > 0 else str(score),
             "Trend": trend,
-            "Sentiment": sentiment
+            "Sentiment": sentiment,
+            "Driver": drivers if drivers else "—"
         }
     except:
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
-            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral"
+            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral", "Driver": "—"
         }
-
-# === Build DataFrames ===
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-
-macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
 # === Cell Styling ===
 def style_trend_cell(val):
@@ -154,6 +166,12 @@ def style_df(df):
            )
 
 # === Layout Display ===
+stock_data = [process_symbol(sym) for sym in stock_list]
+macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
