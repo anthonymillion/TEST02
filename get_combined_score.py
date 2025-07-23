@@ -31,27 +31,21 @@ macro_symbols = {
 
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
-st.title("📊 Sentiment Scanner")
+st.title("\ud83d\udcca Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Helper: Styled TREND Box ===
+# === Color-Coded Trend Box ===
 def styled_trend(trend):
-    label = {
-        "UPTREND": "⬆ UPTREND",
-        "DOWNTREND": "⬇ DOWNTREND",
-        "NEUTRAL": "⏸ NEUTRAL"
-    }.get(trend, "⏸ NEUTRAL")
+    color = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}.get(trend, "#6c757d")
+    return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{trend}</span>'
 
-    color = {
-        "UPTREND": "#28a745",     # green
-        "DOWNTREND": "#dc3545",   # red
-        "NEUTRAL": "#6c757d"      # gray
-    }.get(trend, "#6c757d")
+# === Color-Coded Sentiment Box ===
+def styled_sentiment(sentiment):
+    color = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}.get(sentiment, "#6c757d")
+    return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{sentiment}</span>'
 
-    return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{label}</span>'
-
-# === Economic Risk Score ===
+# === Risk Score ===
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -62,7 +56,7 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Combined Score ===
+# === Score Function ===
 def get_combined_score(symbol):
     score = 0
     try:
@@ -88,7 +82,6 @@ def get_combined_score(symbol):
     except: pass
 
     if get_macro_risk_score() > 6: score -= 1
-
     return score
 
 # === Symbol Processor ===
@@ -123,24 +116,22 @@ def process_symbol(symbol, label=None, is_macro=False):
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
-            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪"
+            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral"
         }
 
 # === Build Tables ===
 stock_data = [process_symbol(sym) for sym in stock_list]
 stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 
-try:
-    macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-    macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-except:
-    macro_df = pd.DataFrame()
+macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
-# === Apply Styled TREND Box ===
 stock_df["Trend"] = stock_df["Trend"].apply(styled_trend)
+stock_df["Sentiment"] = stock_df["Sentiment"].apply(styled_sentiment)
 macro_df["Trend"] = macro_df["Trend"].apply(styled_trend)
+macro_df["Sentiment"] = macro_df["Sentiment"].apply(styled_sentiment)
 
-# === Style ===
+# === Clean Theme Styling ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
@@ -167,13 +158,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# === Display in Side-by-Side Layout ===
+# === Layout ===
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
-    st.markdown("### 📈 NASDAQ-100 Stocks")
+    st.markdown("### \ud83d\udcc8 NASDAQ-100 Stocks")
     st.write(stock_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 with col2:
-    st.markdown("### 🌐 Global Market Symbols")
+    st.markdown("### \ud83c\udf10 Global Market Symbols")
     st.write(macro_df.to_html(escape=False, index=False), unsafe_allow_html=True)
