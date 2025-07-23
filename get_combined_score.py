@@ -34,7 +34,7 @@ timeframe = st.sidebar.selectbox("⏱ Timeframe", ["1m", "5m", "15m", "1h", "1d"
 # === FETCH COT DATA ===
 @st.cache_data(ttl=7 * 24 * 3600)
 def fetch_cot_data():
-    url = https://www.cftc.gov/files/dea/futures/deacotdisagg.csv
+    url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
 
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
