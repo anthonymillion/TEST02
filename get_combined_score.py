@@ -30,7 +30,7 @@ macro_symbols = {
 }
 
 # === Streamlit Setup ===
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
 st.title("Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
@@ -49,28 +49,18 @@ def get_macro_risk_score():
 # === Combined Score ===
 def get_combined_score(symbol):
     score = 0
-    driver = []
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2:
-            score += 1
-            driver.append("News")
-        elif news.get("companyNewsScore", 0) < -0.2:
-            score -= 1
-            driver.append("News")
-        if news.get("sectorAverageBullishPercent", 0) > 0.5:
-            score += 1
+        if news.get("companyNewsScore", 0) > 0.2: score += 1
+        elif news.get("companyNewsScore", 0) < -0.2: score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
     except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
-                score += 1
-                driver.append("Earnings")
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
-                score -= 1
-                driver.append("Earnings")
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
     except: pass
 
     try:
@@ -78,28 +68,11 @@ def get_combined_score(symbol):
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol:
-                score += 1
-                driver.append("IPO")
+            if i.get("symbol") == symbol: score += 1
     except: pass
 
-    try:
-        opt = yf.Ticker(symbol).option_chain()
-        call_oi = opt.calls["openInterest"].sum()
-        put_oi = opt.puts["openInterest"].sum()
-        if call_oi > put_oi * 1.2:
-            score += 1
-            driver.append("Options")
-        elif put_oi > call_oi * 1.2:
-            score -= 1
-            driver.append("Options")
-    except: pass
-
-    if get_macro_risk_score() > 6:
-        score -= 1
-        driver.append("Macro")
-
-    return score, ", ".join(driver)
+    if get_macro_risk_score() > 6: score -= 1
+    return score
 
 # === Symbol Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
@@ -115,7 +88,7 @@ def process_symbol(symbol, label=None, is_macro=False):
         float_shares = info.get("sharesOutstanding")
         market_cap = info.get("marketCap")
 
-        score, driver = get_combined_score(symbol) if not is_macro else (0, "")
+        score = get_combined_score(symbol) if not is_macro else 0
         trend = "UPTREND" if score > 0 else "DOWNTREND" if score < 0 else "NEUTRAL"
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
@@ -127,16 +100,21 @@ def process_symbol(symbol, label=None, is_macro=False):
             "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
             "Score": f"+{score}" if score > 0 else str(score),
             "Trend": trend,
-            "Sentiment": sentiment,
-            "Driver": driver
+            "Sentiment": sentiment
         }
     except:
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
-            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL",
-            "Sentiment": "⚪ Neutral", "Driver": ""
+            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral"
         }
+
+# === Build DataFrames ===
+stock_data = [process_symbol(sym) for sym in stock_list]
+stock_df = pd.DataFrame(stock_data).sort_values(by="Score", ascending=False, key=lambda x: x.str.replace('+', '').astype(int))
+
+macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+macro_df = pd.DataFrame(macro_data).sort_values(by="Score", ascending=False, key=lambda x: x.str.replace('+', '').astype(int))
 
 # === Cell Styling ===
 def style_trend_cell(val):
@@ -153,7 +131,6 @@ def style_sentiment_cell(val):
     color = color_map.get(val, "#6c757d")
     return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
-# === Table Styles ===
 def style_df(df):
     return (df.style
             .applymap(style_trend_cell, subset=["Trend"])
@@ -164,13 +141,6 @@ def style_df(df):
                 {'selector': 'td', 'props': [('border', '1px solid #333'), ('padding', '6px 10px'), ('font-size', '14px')]}
             ])
            )
-
-# === Build DataFrames ===
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-
-macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
 # === Layout Display ===
 st.markdown("### NASDAQ-100 Stocks")
