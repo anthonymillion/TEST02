@@ -35,6 +35,22 @@ st.title("📊 Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
+# === Helper: Styled TREND Box ===
+def styled_trend(trend):
+    label = {
+        "UPTREND": "⬆ UPTREND",
+        "DOWNTREND": "⬇ DOWNTREND",
+        "NEUTRAL": "⏸ NEUTRAL"
+    }.get(trend, "⏸ NEUTRAL")
+
+    color = {
+        "UPTREND": "#28a745",     # green
+        "DOWNTREND": "#dc3545",   # red
+        "NEUTRAL": "#6c757d"      # gray
+    }.get(trend, "#6c757d")
+
+    return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{label}</span>'
+
 # === Economic Risk Score ===
 def get_macro_risk_score():
     try:
@@ -46,26 +62,21 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Sentiment Score Logic ===
+# === Combined Score ===
 def get_combined_score(symbol):
     score = 0
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2:
-            score += 1
-        elif news.get("companyNewsScore", 0) < -0.2:
-            score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5:
-            score += 1
+        if news.get("companyNewsScore", 0) > 0.2: score += 1
+        elif news.get("companyNewsScore", 0) < -0.2: score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
     except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
-                score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
-                score -= 1
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
     except: pass
 
     try:
@@ -73,12 +84,10 @@ def get_combined_score(symbol):
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol:
-                score += 1
+            if i.get("symbol") == symbol: score += 1
     except: pass
 
-    if get_macro_risk_score() > 6:
-        score -= 1
+    if get_macro_risk_score() > 6: score -= 1
 
     return score
 
@@ -87,8 +96,7 @@ def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d", interval=timeframe)
-        if hist.empty:
-            raise ValueError("Empty data")
+        if hist.empty: raise ValueError("No history")
 
         price = hist["Close"][-1]
         volume = hist["Volume"][-1]
@@ -98,6 +106,7 @@ def process_symbol(symbol, label=None, is_macro=False):
         market_cap = info.get("marketCap")
 
         score = get_combined_score(symbol) if not is_macro else 0
+        trend = "UPTREND" if score > 0 else "DOWNTREND" if score < 0 else "NEUTRAL"
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
         return {
@@ -107,27 +116,31 @@ def process_symbol(symbol, label=None, is_macro=False):
             "Float": f"{float_shares/1e6:.2f}M" if float_shares else "—",
             "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
             "Score": f"+{score}" if score > 0 else str(score),
+            "Trend": trend,
             "Sentiment": sentiment
         }
     except:
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
-            "CAP": "N/A", "Score": "0", "Sentiment": "⚪"
+            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪"
         }
 
-# === Build Tables Safely ===
+# === Build Tables ===
 stock_data = [process_symbol(sym) for sym in stock_list]
 stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 
 try:
     macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
     macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-except Exception as e:
-    st.error("⚠️ Error loading Global Market Symbols.")
+except:
     macro_df = pd.DataFrame()
 
-# === Style & Layout ===
+# === Apply Styled TREND Box ===
+stock_df["Trend"] = stock_df["Trend"].apply(styled_trend)
+macro_df["Trend"] = macro_df["Trend"].apply(styled_trend)
+
+# === Style ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
@@ -154,13 +167,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# === Side-by-Side Tables ===
+# === Display in Side-by-Side Layout ===
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
     st.markdown("### 📈 NASDAQ-100 Stocks")
-    st.dataframe(stock_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    st.write(stock_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
 with col2:
     st.markdown("### 🌐 Global Market Symbols")
-    st.dataframe(macro_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+    st.write(macro_df.to_html(escape=False, index=False), unsafe_allow_html=True)
