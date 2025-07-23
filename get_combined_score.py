@@ -57,7 +57,8 @@ timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 # === Fetch and cache COT data (cached for 7 days) ===
 @st.cache_data(ttl=7*24*3600)
 def fetch_cot_data():
-    url = "https://www.cftc.gov/files/dea/futures/deacotdisagg.csv"
+    url = url = "https://www.cftc.gov/files/dea/history/deacotdisagg.csv"
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
     }
