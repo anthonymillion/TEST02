@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import requests
+from datetime import datetime, timedelta
 
 # === API Keys ===
 FINNHUB_API_KEY = "d1uv2rhr01qujmdeohv0d1uv2rhr01qujmdeohvg"
@@ -20,7 +21,7 @@ stock_list = [
     "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
 ]
 
-# === Global Symbols (in their own block) ===
+# === Global Symbols ===
 macro_symbols = {
     "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
     "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
@@ -45,67 +46,93 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Scoring Logic ===
+# === Combined Sentiment Score ===
 def get_combined_score(symbol):
     score = 0
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2: score += 1
-        if news.get("companyNewsScore", 0) < -0.2: score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except: pass
+        if news.get("companyNewsScore", 0) > 0.2:
+            score += 1
+        elif news.get("companyNewsScore", 0) < -0.2:
+            score -= 1
+        if news.get("sectorAverageBullishPercent", 0) > 0.5:
+            score += 1
+    except:
+        pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except: pass
+            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)):
+                score += 1
+            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)):
+                score -= 1
+    except:
+        pass
 
     try:
-        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from=2024-01-01&to=2025-12-31&token={FINNHUB_API_KEY}").json()
+        start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
+        end = datetime.today().strftime("%Y-%m-%d")
+        ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
-    except: pass
+            if i.get("symbol") == symbol:
+                score += 1
+    except:
+        pass
 
     macro_risk = get_macro_risk_score()
-    if macro_risk > 6: score -= 1
+    if macro_risk > 6:
+        score -= 1
 
     return score
 
-# === Process Each Symbol ===
-def process_symbol(symbol, label=None):
+# === Data Processor ===
+def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d", interval=timeframe)
-        info = ticker.info
 
-        price = hist["Close"][-1] if not hist.empty else None
-        volume = hist["Volume"][-1] if not hist.empty else None
-        float_shares = info.get("floatShares", None)
-        market_cap = info.get("marketCap", None)
+        if hist.empty:
+            raise ValueError("Empty history")
 
-        score = get_combined_score(symbol)
+        price = hist["Close"][-1]
+        volume = hist["Volume"][-1]
+        info = ticker.fast_info
+
+        float_shares = info.get("sharesOutstanding")
+        market_cap = info.get("marketCap")
+
+        score = get_combined_score(symbol) if not is_macro else 0
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
         return {
             "Symbol": label or symbol,
-            "Price": f"${price:.2f}" if price else "N/A",
-            "Volume": f"{volume/1e6:.2f}M" if volume else "N/A",
-            "Float": f"{float_shares/1e6:.2f}M" if float_shares else "N/A",
+            "Price": f"${price:.2f}",
+            "Volume": f"{volume/1e6:.2f}M",
+            "Float": f"{float_shares/1e6:.2f}M" if float_shares else "—",
             "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
             "Score": f"+{score}" if score > 0 else str(score),
             "Sentiment": sentiment
         }
     except:
         return {
-            "Symbol": label or symbol, "Price": "Err", "Volume": "Err",
-            "Float": "Err", "CAP": "Err", "Score": "0", "Sentiment": "⚪"
+            "Symbol": label or symbol,
+            "Price": "N/A", "Volume": "N/A", "Float": "N/A",
+            "CAP": "N/A", "Score": "0", "Sentiment": "⚪"
         }
 
-# === Build and Display Tables ===
+# === Build DataFrames with error protection ===
+stock_data = [process_symbol(sym) for sym in stock_list]
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 
-# === CSS Styling for Dark Compact Two-Column View ===
+try:
+    macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+    macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
+except Exception as e:
+    st.error("⚠️ Error loading Global Market Symbols.")
+    macro_df = pd.DataFrame()
+
+# === CSS Styling for Dark Mode + Resizable Flex Layout ===
 st.markdown("""
     <style>
     .dataframe th, .dataframe td {
@@ -121,36 +148,38 @@ st.markdown("""
     }
     .block-container {
         padding-top: 1rem !important;
-        padding-bottom: 0rem !important;
     }
-    .element-container:has(div[data-testid="column"]) {
-        gap: 0px !important;
+    .flex-container {
+        display: flex;
+        width: 100%;
+        gap: 0px;
     }
-    .stDataFrame {
-        margin-bottom: 0rem !important;
+    .flex-child {
+        flex: 1;
+        padding: 0px;
+    }
+    .resizable {
+        resize: horizontal;
+        overflow: auto;
+        min-width: 300px;
+        max-width: 100%;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# === Side-by-Side Layout Without Gap ===
-col1, col2 = st.columns([1, 1], gap="small")  # uses small gap, but visually compressed via CSS
+# === Display Tables in Resizable Layout ===
+st.markdown('<div class="flex-container">', unsafe_allow_html=True)
 
-with col1:
-    st.markdown("### 📈 NASDAQ-100 Stocks")
-    st.dataframe(
-        pd.DataFrame([process_symbol(sym) for sym in stock_list])
-        .sort_values("Score", ascending=False)
-        .reset_index(drop=True),
-        use_container_width=True,
-        hide_index=True
-    )
+# Stocks Table (resizable left panel)
+st.markdown('<div class="flex-child resizable">', unsafe_allow_html=True)
+st.markdown("### 📈 NASDAQ-100 Stocks")
+st.dataframe(stock_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-with col2:
-    st.markdown("### 🌐 Global Market Symbols")
-    st.dataframe(
-        pd.DataFrame([process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()])
-        .sort_values("Score", ascending=False)
-        .reset_index(drop=True),
-        use_container_width=True,
-        hide_index=True
-    )
+# Global Table (fixed right panel)
+st.markdown('<div class="flex-child">', unsafe_allow_html=True)
+st.markdown("### 🌐 Global Market Symbols")
+st.dataframe(macro_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown('</div>', unsafe_allow_html=True)
