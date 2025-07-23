@@ -11,16 +11,7 @@ TRADING_ECON_USER = "c88d1d122399451"
 TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
 # === Stock List ===
-stock_list = [
-    "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
-    "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
-    "AZN", "BIIB", "BKNG", "BKR", "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CMCSA", "CPRT", "CSGP", "CSCO",
-    "CSX", "CTAS", "CTSH", "CRWD", "DASH", "DDOG", "DXCM", "EA", "EXC", "FAST", "FANG", "FTNT", "GEHC",
-    "GILD", "GFS", "HON", "IDXX", "INTC", "INTU", "ISRG", "KDP", "KHC", "KLAC", "LIN", "LRCX", "LULU",
-    "MAR", "MCHP", "MDLZ", "MELI", "MNST", "MRVL", "MSTR", "MU", "NXPI", "ODFL", "ON", "ORLY", "PANW",
-    "PAYX", "PYPL", "PDD", "PEP", "PLTR", "QCOM", "REGN", "ROP", "ROST", "SHOP", "SBUX", "SNPS", "TTWO",
-    "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
-]
+stock_list = ["NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST"]
 
 # === Global Market Symbols ===
 macro_symbols = {
@@ -32,41 +23,28 @@ macro_symbols = {
 
 # === Mapping Macro Symbols to COT Report Names ===
 cot_name_map = {
-    "DXY": "U.S. Dollar Index",
-    "USDJPY=X": "Japanese Yen",
-    "XAUUSD=X": "Gold",
-    "EURUSD=X": "Euro FX",
-    "CL=F": "Crude Oil",
-    "^NDX": "Nasdaq 100",
-    "^GSPC": "S&P 500",
-    "NG=F": "Natural Gas",
-    "SI=F": "Silver",
-    "BZ=F": "Brent Crude Oil",
-    "^TNX": "10-Year Treasury Note",
-    # Add more mappings as needed
+    "DXY": "U.S. Dollar Index", "USDJPY=X": "Japanese Yen", "XAUUSD=X": "Gold", "EURUSD=X": "Euro FX",
+    "CL=F": "Crude Oil", "^NDX": "Nasdaq 100", "^GSPC": "S&P 500", "NG=F": "Natural Gas",
+    "SI=F": "Silver", "BZ=F": "Brent Crude Oil", "^TNX": "10-Year Treasury Note"
 }
 
 # === Streamlit Setup ===
 st.set_page_config(layout="wide")
 st.title("Sentiment Scanner with COT Data")
 st.sidebar.title("Settings")
-
-# Sidebar controls
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Fetch and cache COT data (cached for 7 days) ===
+# === Fetch COT data with working URL ===
 @st.cache_data(ttl=7*24*3600)
 def fetch_cot_data():
-    url = url = "https://www.cftc.gov/files/dea/history/deacotdisagg.csv"
-
+    url = "https://www.cftc.gov/files/dea/history/deacotdisagg.csv"  # ✅ Fixed URL
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0"
     }
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        csv_data = io.StringIO(response.text)
-        df = pd.read_csv(csv_data, skiprows=7)
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text), skiprows=7)
         df["Report_Date_as_MM_DD_YYYY"] = pd.to_datetime(df["Report_Date_as_MM_DD_YYYY"])
         return df
     except Exception as e:
@@ -75,16 +53,11 @@ def fetch_cot_data():
 
 cot_df = fetch_cot_data()
 
-# === Helper: Get latest COT record for given instrument ===
-def get_latest_cot_for_instrument(df, instrument_name):
-    filtered = df[df["Market_and_Exchange_Names"].str.contains(instrument_name, case=False, na=False)]
-    if filtered.empty:
-        return None
-    latest_date = filtered["Report_Date_as_MM_DD_YYYY"].max()
-    latest_data = filtered[filtered["Report_Date_as_MM_DD_YYYY"] == latest_date].iloc[0]
-    return latest_data
+def get_latest_cot_for_instrument(df, name):
+    subset = df[df["Market_and_Exchange_Names"].str.contains(name, case=False, na=False)]
+    if subset.empty: return None
+    return subset[subset["Report_Date_as_MM_DD_YYYY"] == subset["Report_Date_as_MM_DD_YYYY"].max()].iloc[0]
 
-# === Macro Risk Score ===
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -92,10 +65,8 @@ def get_macro_risk_score():
         red = sum(1 for e in res if e.get("importance") == 3)
         yellow = sum(1 for e in res if e.get("importance") == 2)
         return red + 0.5 * yellow
-    except:
-        return 0
+    except: return 0
 
-# === Combined Score with COT Sentiment ===
 def get_combined_score(symbol):
     score = 0
     try:
@@ -103,57 +74,38 @@ def get_combined_score(symbol):
         if news.get("companyNewsScore", 0) > 0.2: score += 1
         elif news.get("companyNewsScore", 0) < -0.2: score -= 1
         if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except:
-        pass
+    except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
             if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
             elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except:
-        pass
+    except: pass
 
     try:
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol:
-                score += 1
-    except:
-        pass
+            if i.get("symbol") == symbol: score += 1
+    except: pass
 
-    if get_macro_risk_score() > 6:
-        score -= 1
+    if get_macro_risk_score() > 6: score -= 1
 
-    # COT Sentiment integration
-    cot_instrument = None
-    # Map macro_symbols values to cot_name_map keys
-    for key, val in macro_symbols.items():
-        if val == symbol:
-            cot_instrument = cot_name_map.get(key)
-            break
-    if not cot_instrument:
-        cot_instrument = cot_name_map.get(symbol)
-
-    if cot_instrument and not cot_df.empty:
-        cot_data = get_latest_cot_for_instrument(cot_df, cot_instrument)
+    cot_name = cot_name_map.get(symbol)
+    if cot_name and not cot_df.empty:
+        cot_data = get_latest_cot_for_instrument(cot_df, cot_name)
         if cot_data is not None:
             try:
-                net_noncom = cot_data["Noncommercial_Long_All"] - cot_data["Noncommercial_Short_All"]
-                open_interest = cot_data["Open_Interest"]
-                net_ratio = net_noncom / open_interest if open_interest > 0 else 0
-                if net_ratio > 0.1:
-                    score += 1
-                elif net_ratio < -0.1:
-                    score -= 1
-            except:
-                pass
+                net = cot_data["Noncommercial_Long_All"] - cot_data["Noncommercial_Short_All"]
+                ratio = net / cot_data["Open_Interest"] if cot_data["Open_Interest"] else 0
+                if ratio > 0.1: score += 1
+                elif ratio < -0.1: score -= 1
+            except: pass
 
     return score
 
-# === Symbol Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
     try:
         ticker = yf.Ticker(symbol)
@@ -192,16 +144,12 @@ def process_symbol(symbol, label=None, is_macro=False):
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
     color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center;"
 
 def style_sentiment_cell(val):
-    color_map = {
-        "🟢 Bullish": "#28a745",
-        "🔴 Bearish": "#dc3545",
-        "⚪ Neutral": "#6c757d"
-    }
+    color_map = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}
     color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center;"
 
 def style_df(df):
     return (df.style
