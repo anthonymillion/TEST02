@@ -116,7 +116,7 @@ stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
-# === Pandas Styling Functions for Trend & Sentiment with background color boxes ===
+# === Cell Styling ===
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
     color = color_map.get(val, "#6c757d")
@@ -131,20 +131,18 @@ def style_sentiment_cell(val):
     color = color_map.get(val, "#6c757d")
     return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
-# Apply pandas Styler to dataframes before displaying
 def style_df(df):
     return (df.style
             .applymap(style_trend_cell, subset=["Trend"])
             .applymap(style_sentiment_cell, subset=["Sentiment"])
             .set_properties(**{'text-align': 'center'})
-            .hide_index()
             .set_table_styles([
                 {'selector': 'th', 'props': [('text-align', 'center'), ('background-color', '#222'), ('color', '#ddd')]},
                 {'selector': 'td', 'props': [('border', '1px solid #333'), ('padding', '6px 10px'), ('font-size', '14px')]}
             ])
            )
 
-# === Layout Display with side-by-side tables ===
+# === Layout Display ===
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
