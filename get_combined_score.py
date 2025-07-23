@@ -30,16 +30,9 @@ macro_symbols = {
 }
 
 # === Streamlit Setup ===
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
 st.title("Sentiment Scanner")
 st.sidebar.title("Settings")
-
-# Sidebar collapsed by default
-st.sidebar.markdown("<style>div[data-testid='stSidebar']{display:none;}</style>", unsafe_allow_html=True)
-# Add button to toggle sidebar
-if st.button("Toggle Sidebar"):
-    st.sidebar.markdown("", unsafe_allow_html=True)
-
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
 # === Macro Risk Score ===
@@ -53,21 +46,37 @@ def get_macro_risk_score():
     except:
         return 0
 
-# === Combined Score ===
+# === Combined Score & Driver ===
 def get_combined_score(symbol):
     score = 0
+    driver = "—"
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
-        if news.get("companyNewsScore", 0) > 0.2: score += 1
-        elif news.get("companyNewsScore", 0) < -0.2: score -= 1
-        if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
+        comp_score = news.get("companyNewsScore", 0)
+        sector_bull = news.get("sectorAverageBullishPercent", 0)
+        if comp_score > 0.2:
+            score += 1
+            driver = "News"
+        elif comp_score < -0.2:
+            score -= 1
+            driver = "News"
+        if sector_bull > 0.5:
+            score += 1
+            if driver == "—":
+                driver = "News"
     except: pass
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
+            eps_act = float(e.get("epsActual", 0))
+            eps_est = float(e.get("epsEstimate", 0))
+            if eps_act > eps_est:
+                score += 1
+                driver = "Earnings"
+            elif eps_act < eps_est:
+                score -= 1
+                driver = "Earnings"
     except: pass
 
     try:
@@ -75,11 +84,18 @@ def get_combined_score(symbol):
         end = datetime.today().strftime("%Y-%m-%d")
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
-            if i.get("symbol") == symbol: score += 1
+            if i.get("symbol") == symbol:
+                score += 1
+                if driver == "—":
+                    driver = "IPO"
     except: pass
 
-    if get_macro_risk_score() > 6: score -= 1
-    return score
+    if get_macro_risk_score() > 6:
+        score -= 1
+        if driver == "—":
+            driver = "Macro Risk"
+
+    return score, driver
 
 # === Symbol Data Processor ===
 def process_symbol(symbol, label=None, is_macro=False):
@@ -95,18 +111,9 @@ def process_symbol(symbol, label=None, is_macro=False):
         float_shares = info.get("sharesOutstanding")
         market_cap = info.get("marketCap")
 
-        score = get_combined_score(symbol) if not is_macro else 0
+        score, driver = (get_combined_score(symbol) if not is_macro else (0, "—"))
         trend = "UPTREND" if score > 0 else "DOWNTREND" if score < 0 else "NEUTRAL"
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
-
-        # Driver: e.g. "News", "Earnings", or "Options" randomly for demo (you can replace with real logic)
-        # For demo: If score > 1 -> News, elif score == 1 -> Earnings, else Options
-        if score > 1:
-            driver = "News"
-        elif score == 1:
-            driver = "Earnings"
-        else:
-            driver = "Options"
 
         return {
             "Symbol": label or symbol,
@@ -114,7 +121,8 @@ def process_symbol(symbol, label=None, is_macro=False):
             "Volume": f"{volume/1e6:.2f}M",
             "Float": f"{float_shares/1e6:.2f}M" if float_shares else "—",
             "CAP": f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
-            "Score": f"+{score}" if score > 0 else str(score),
+            "Score": score,
+            "Score_Display": f"+{score}" if score > 0 else str(score),
             "Trend": trend,
             "Sentiment": sentiment,
             "Driver": driver
@@ -123,86 +131,67 @@ def process_symbol(symbol, label=None, is_macro=False):
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
-            "CAP": "N/A", "Score": "0", "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral", "Driver": "-"
+            "CAP": "N/A", "Score": 0, "Score_Display": "0",
+            "Trend": "NEUTRAL", "Sentiment": "⚪ Neutral", "Driver": "—"
         }
+
+# === Build DataFrames ===
+stock_data = [process_symbol(sym) for sym in stock_list]
+stock_df = pd.DataFrame(stock_data)
+stock_df = stock_df.sort_values("Score", ascending=False)
+
+macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+macro_df = pd.DataFrame(macro_data)
+macro_df = macro_df.sort_values("Score", ascending=False)
 
 # === Cell Styling ===
 def style_symbol_cell(val):
-    return ("background-color: #6c757d; color: white; font-weight: bold; "
-            "text-align:center; border-radius: 4px; padding: 3px;")
+    return "background-color: #a9a9a9; color: white; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_price_cell(val):
-    return ("background-color: #d4edda; color: #155724; font-weight: bold; "
-            "text-align:center; border-radius: 4px; padding: 3px;")
+    return "background-color: #90ee90; color: black; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_volume_cell(val):
-    return ("background-color: #cce5ff; color: #004085; font-weight: bold; "
-            "text-align:center; border-radius: 4px; padding: 3px;")
+    return "background-color: #add8e6; color: black; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_score_cell(val):
-    return ("background-color: #6495ed; color: white; font-weight: bold; "
-            "text-align:center; border-radius: 4px; padding: 3px;")
+    return "background-color: #6495ed; color: white; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
     color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_sentiment_cell(val):
-    color_map = {
-        "🟢 Bullish": "#28a745",
-        "🔴 Bearish": "#dc3545",
-        "⚪ Neutral": "#6c757d"
-    }
+    color_map = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}
     color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_driver_cell(val):
-    color_map = {
-        "News": "#17a2b8",
-        "Earnings": "#ffc107",
-        "Options": "#6f42c1",
-        "-": "#6c757d"
-    }
-    color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
-
+    return "background-color: #f0ad4e; color: black; font-weight: bold; text-align:center; border-radius:4px; padding:5px;"
 
 def style_df(df):
     return (df.style
             .applymap(style_symbol_cell, subset=["Symbol"])
             .applymap(style_price_cell, subset=["Price"])
             .applymap(style_volume_cell, subset=["Volume"])
-            .applymap(style_score_cell, subset=["Score"])
+            .applymap(style_score_cell, subset=["Score_Display"])
             .applymap(style_trend_cell, subset=["Trend"])
             .applymap(style_sentiment_cell, subset=["Sentiment"])
             .applymap(style_driver_cell, subset=["Driver"])
+            .hide(columns=["Score"])  # Hide numeric score column, show formatted instead
             .set_properties(**{'text-align': 'center'})
             .set_table_styles([
-                {'selector': 'th', 'props': [('text-align', 'center'),
-                                            ('background-color', '#222'),
-                                            ('color', '#ddd'),
-                                            ('border', '2px solid #444')]},
-                {'selector': 'td', 'props': [('border', '1px solid #444'),
-                                            ('padding', '6px 10px'),
-                                            ('font-size', '14px')]}
+                {'selector': 'th', 'props': [('background-color', '#222'), ('color', '#ddd'), ('border', '2px solid #555')]},
+                {'selector': 'td', 'props': [('border', '1px solid #444'), ('padding', '8px'), ('font-size', '14px')]},
+                {'selector': 'table', 'props': [('border-collapse', 'collapse'), ('width', '100%'), ('border', '2px solid #555')]},
             ])
            )
 
-# === Build DataFrames ===
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
-
-macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
-macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
-
 # === Layout Display ===
-col1, col2 = st.columns([1, 1], gap="small")
 
-with col1:
-    st.markdown("### NASDAQ-100 Stocks")
-    st.dataframe(style_df(stock_df), use_container_width=True)
+st.markdown("### NASDAQ-100 Stocks")
+st.dataframe(style_df(stock_df), use_container_width=True)
 
-with col2:
-    st.markdown("### Global Market Symbols")
-    st.dataframe(style_df(macro_df), use_container_width=True)
+st.markdown("### Global Market Symbols")
+st.dataframe(style_df(macro_df), use_container_width=True)
