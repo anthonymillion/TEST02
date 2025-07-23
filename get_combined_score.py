@@ -35,16 +35,6 @@ st.title("Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
-# === Color-Coded TREND Box ===
-def styled_trend(trend):
-    color = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}.get(trend, "#6c757d")
-    return f'<span style="background-color:{color};color:white;padding:3px 8px;border-radius:4px;font-weight:bold;">{trend}</span>'
-
-# === Color-Coded Sentiment (flat text, no circle) ===
-def styled_sentiment(sentiment):
-    color = {"🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"}.get(sentiment, "#6c757d")
-    return f'<span style="color:{color};font-weight:bold;">{sentiment}</span>'
-
 # === Macro Risk Score ===
 def get_macro_risk_score():
     try:
@@ -126,44 +116,41 @@ stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
-# === Style Columns ===
-stock_df["Trend"] = stock_df["Trend"].apply(styled_trend)
-stock_df["Sentiment"] = stock_df["Sentiment"].apply(styled_sentiment)
-macro_df["Trend"] = macro_df["Trend"].apply(styled_trend)
-macro_df["Sentiment"] = macro_df["Sentiment"].apply(styled_sentiment)
+# === Pandas Styling Functions for Trend & Sentiment with background color boxes ===
+def style_trend_cell(val):
+    color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
+    color = color_map.get(val, "#6c757d")
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
-# === Clean Display Styling ===
-st.markdown("""
-    <style>
-    .dataframe th, .dataframe td {
-        text-align: center !important;
-        color: #ddd !important;
-        background-color: #111 !important;
-        border: 1px solid #333 !important;
-        font-size: 14px !important;
-        padding: 6px 10px !important;
+def style_sentiment_cell(val):
+    color_map = {
+        "🟢 Bullish": "#28a745",
+        "🔴 Bearish": "#dc3545",
+        "⚪ Neutral": "#6c757d"
     }
-    .dataframe th {
-        background-color: #222 !important;
-        font-weight: bold;
-    }
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 0rem !important;
-    }
-    .element-container:has(div[data-testid="column"]) {
-        gap: 4px !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+    color = color_map.get(val, "#6c757d")
+    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
-# === Layout Display ===
+# Apply pandas Styler to dataframes before displaying
+def style_df(df):
+    return (df.style
+            .applymap(style_trend_cell, subset=["Trend"])
+            .applymap(style_sentiment_cell, subset=["Sentiment"])
+            .set_properties(**{'text-align': 'center'})
+            .hide_index()
+            .set_table_styles([
+                {'selector': 'th', 'props': [('text-align', 'center'), ('background-color', '#222'), ('color', '#ddd')]},
+                {'selector': 'td', 'props': [('border', '1px solid #333'), ('padding', '6px 10px'), ('font-size', '14px')]}
+            ])
+           )
+
+# === Layout Display with side-by-side tables ===
 col1, col2 = st.columns([1, 1], gap="small")
 
 with col1:
     st.markdown("### NASDAQ-100 Stocks")
-    st.write(stock_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.dataframe(style_df(stock_df), use_container_width=True)
 
 with col2:
     st.markdown("### Global Market Symbols")
-    st.write(macro_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.dataframe(style_df(macro_df), use_container_width=True)
