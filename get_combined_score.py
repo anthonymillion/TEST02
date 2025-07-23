@@ -10,23 +10,12 @@ TRADING_ECON_USER = "c88d1d122399451"
 TRADING_ECON_KEY = "rdog9czpshn7zb9"
 
 # === Stock List ===
-stock_list = [
-    "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX",
-    "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "AMAT", "AMGN", "APP", "ANSS", "ARM", "ASML", "AXON",
-    "AZN", "BIIB", "BKNG", "BKR", "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CMCSA", "CPRT", "CSGP", "CSCO",
-    "CSX", "CTAS", "CTSH", "CRWD", "DASH", "DDOG", "DXCM", "EA", "EXC", "FAST", "FANG", "FTNT", "GEHC",
-    "GILD", "GFS", "HON", "IDXX", "INTC", "INTU", "ISRG", "KDP", "KHC", "KLAC", "LIN", "LRCX", "LULU",
-    "MAR", "MCHP", "MDLZ", "MELI", "MNST", "MRVL", "MSTR", "MU", "NXPI", "ODFL", "ON", "ORLY", "PANW",
-    "PAYX", "PYPL", "PDD", "PEP", "PLTR", "QCOM", "REGN", "ROP", "ROST", "SHOP", "SBUX", "SNPS", "TTWO",
-    "TMUS", "TXN", "TTD", "VRSK", "VRTX", "WBD", "WDAY", "XEL", "ZS"
-]
+stock_list = [ "NVDA", "MSFT", "AAPL", "AMZN", "GOOGL", "GOOG", "META", "TSLA", "AVGO", "COST", "AMD", "NFLX" ]
 
 # === Global Market Symbols ===
 macro_symbols = {
     "DXY": "DXY", "USDJPY": "USDJPY=X", "XAUUSD": "XAUUSD=X", "EURUSD": "EURUSD=X",
-    "USOIL": "CL=F", "USTECH100": "^NDX", "S&P500": "^GSPC", "BTCUSD": "BTC-USD",
-    "ETHUSD": "ETH-USD", "RUSSEL2000": "^RUT", "NIKKEI": "^N225", "SILVER": "SI=F",
-    "QQQ": "QQQ", "NATGAS": "NG=F", "COPPER": "HG=F", "BRENT": "BZ=F", "VIX": "^VIX", "BONDYIELD": "^TNX"
+    "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "S&P500": "^GSPC", "VIX": "^VIX"
 }
 
 # === Streamlit Setup ===
@@ -35,7 +24,11 @@ st.title("Sentiment Scanner")
 st.sidebar.title("Settings")
 timeframe = st.sidebar.selectbox("Timeframe", ["1m", "5m", "15m", "1h", "1d"])
 
+# === Logging Flag ===
+DEBUG = True
+
 # === Macro Risk Score ===
+@st.cache_data(ttl=300)
 def get_macro_risk_score():
     try:
         url = f"https://api.tradingeconomics.com/calendar/country/united states?c={TRADING_ECON_USER}:{TRADING_ECON_KEY}"
@@ -43,25 +36,34 @@ def get_macro_risk_score():
         red = sum(1 for e in res if e.get("importance") == 3)
         yellow = sum(1 for e in res if e.get("importance") == 2)
         return red + 0.5 * yellow
-    except:
+    except Exception as e:
+        if DEBUG: st.warning(f"Macro risk error: {e}")
         return 0
 
 # === Combined Score ===
 def get_combined_score(symbol):
     score = 0
+
     try:
         news = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}").json()
+        if DEBUG: st.text(f"[{symbol}] News: {news.get('companyNewsScore')}")
+
         if news.get("companyNewsScore", 0) > 0.2: score += 1
         elif news.get("companyNewsScore", 0) < -0.2: score -= 1
+
         if news.get("sectorAverageBullishPercent", 0) > 0.5: score += 1
-    except: pass
+    except Exception as e:
+        if DEBUG: st.warning(f"[{symbol}] News API error: {e}")
 
     try:
         earnings = requests.get(f"https://finnhub.io/api/v1/calendar/earnings?symbol={symbol}&token={FINNHUB_API_KEY}").json()
         for e in earnings.get("earningsCalendar", []):
-            if float(e.get("epsActual", 0)) > float(e.get("epsEstimate", 0)): score += 1
-            elif float(e.get("epsActual", 0)) < float(e.get("epsEstimate", 0)): score -= 1
-    except: pass
+            actual = float(e.get("epsActual", 0))
+            estimate = float(e.get("epsEstimate", 0))
+            if actual > estimate: score += 1
+            elif actual < estimate: score -= 1
+    except Exception as e:
+        if DEBUG: st.warning(f"[{symbol}] Earnings API error: {e}")
 
     try:
         start = (datetime.today() - timedelta(days=14)).strftime("%Y-%m-%d")
@@ -69,26 +71,46 @@ def get_combined_score(symbol):
         ipo = requests.get(f"https://finnhub.io/api/v1/calendar/ipo?from={start}&to={end}&token={FINNHUB_API_KEY}").json()
         for i in ipo.get("ipoCalendar", []):
             if i.get("symbol") == symbol: score += 1
-    except: pass
+    except Exception as e:
+        if DEBUG: st.warning(f"[{symbol}] IPO API error: {e}")
 
     if get_macro_risk_score() > 6: score -= 1
+
     return score
 
-# === Symbol Data Processor ===
-def process_symbol(symbol, label=None, is_macro=False):
+# === Symbol Processor ===
+@st.cache_data(ttl=300)
+def process_symbol(symbol, label=None, is_macro=False, timeframe="1d"):
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d", interval=timeframe)
-        if hist.empty: raise ValueError("No history")
+
+        if hist.empty:
+            raise ValueError("No price history")
 
         price = hist["Close"][-1]
         volume = hist["Volume"][-1]
-        info = ticker.fast_info
 
+        info = ticker.fast_info
         float_shares = info.get("sharesOutstanding")
+
+        if not float_shares:
+            try:
+                float_shares = ticker.info.get("floatShares")
+            except:
+                float_shares = None
+
         market_cap = info.get("marketCap")
 
+        # Score only stocks, not global macros
         score = get_combined_score(symbol) if not is_macro else 0
+
+        # Trend fallback: if no signal, infer from recent price move
+        if score == 0:
+            price_change = (hist["Close"][-1] - hist["Close"][-2]) / hist["Close"][-2]
+            if price_change > 0.01: score += 1
+            elif price_change < -0.01: score -= 1
+
         trend = "UPTREND" if score > 0 else "DOWNTREND" if score < 0 else "NEUTRAL"
         sentiment = "🟢 Bullish" if score > 0 else "🔴 Bearish" if score < 0 else "⚪ Neutral"
 
@@ -102,7 +124,9 @@ def process_symbol(symbol, label=None, is_macro=False):
             "Trend": trend,
             "Sentiment": sentiment
         }
-    except:
+
+    except Exception as e:
+        if DEBUG: st.error(f"[{symbol}] Error: {e}")
         return {
             "Symbol": label or symbol,
             "Price": "N/A", "Volume": "N/A", "Float": "N/A",
@@ -110,26 +134,22 @@ def process_symbol(symbol, label=None, is_macro=False):
         }
 
 # === Build DataFrames ===
-stock_data = [process_symbol(sym) for sym in stock_list]
-stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
+stock_data = [process_symbol(sym, timeframe=timeframe) for sym in stock_list]
+macro_data = [process_symbol(tick, label, True, timeframe) for label, tick in macro_symbols.items()]
 
-macro_data = [process_symbol(tick, name, is_macro=True) for name, tick in macro_symbols.items()]
+stock_df = pd.DataFrame(stock_data).sort_values("Score", ascending=False)
 macro_df = pd.DataFrame(macro_data).sort_values("Score", ascending=False)
 
-# === Cell Styling ===
+# === Styling ===
 def style_trend_cell(val):
     color_map = {"UPTREND": "#28a745", "DOWNTREND": "#dc3545", "NEUTRAL": "#6c757d"}
-    color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color_map.get(val)}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
 def style_sentiment_cell(val):
     color_map = {
-        "🟢 Bullish": "#28a745",
-        "🔴 Bearish": "#dc3545",
-        "⚪ Neutral": "#6c757d"
+        "🟢 Bullish": "#28a745", "🔴 Bearish": "#dc3545", "⚪ Neutral": "#6c757d"
     }
-    color = color_map.get(val, "#6c757d")
-    return f"background-color: {color}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
+    return f"background-color: {color_map.get(val)}; color: white; font-weight: bold; text-align:center; border-radius: 4px; padding: 3px;"
 
 def style_df(df):
     return (df.style
@@ -140,7 +160,7 @@ def style_df(df):
                 {'selector': 'th', 'props': [('text-align', 'center'), ('background-color', '#222'), ('color', '#ddd')]},
                 {'selector': 'td', 'props': [('border', '1px solid #333'), ('padding', '6px 10px'), ('font-size', '14px')]}
             ])
-           )
+    )
 
 # === Layout Display ===
 col1, col2 = st.columns([1, 1], gap="small")
